@@ -1,0 +1,61 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      # Host port 8080 to container port 80
+      - "8080:80"
+    depends_on:
+      #Backend
+      - app
+    networks:
+      - edge
+
+  app: #Flask
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    environment: #connect to MySQL
+      DB_HOST: db
+      DB_NAME: budgetdb
+      DB_USER: budgetuser
+      DB_PASSWORD: budgetpass
+
+    #Expose app backend to host
+    ports:
+      # host port 8000 to container port 8000.
+      - "8000:8000"
+
+    depends_on:
+      - db
+
+    networks:
+      # App to frontend
+      - edge
+      # App to database
+      - backend
+
+  db:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    environment: #initializes MySQL
+      MYSQL_DATABASE: budgetdb
+      MYSQL_USER: budgetuser
+      MYSQL_PASSWORD: budgetpass
+      MYSQL_ROOT_PASSWORD: rootpass
+    volumes: #volume to store database info safely
+      # Named volume to MySQL's data folder
+      - db_data:/var/lib/mysql
+    networks:
+    #app to database
+      - backend
+
+volumes:
+  db_data:
+
+networks:
+  edge:
+  backend:
+    internal: true #private
