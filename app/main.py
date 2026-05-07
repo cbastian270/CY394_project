@@ -1,4 +1,4 @@
-# USed Chat: 
+
 
 
 from flask import Flask, jsonify, request, render_template_string
@@ -77,10 +77,13 @@ def init_database():
     cursor.execute("SELECT COUNT(*) FROM activities")
     if cursor.fetchone()[0] == 0:
         default_activities = [
-            ("Run", 10),
-            ("Gym Workout", 15),
+            ("Recorded Run", 10),
+            ("Company Workout", 15),
             ("Improved AFT Score", 25),
-            ("Fitness Milestone", 30)
+            ("Maxed AFT", 30),
+            ("Ran marathon", 30),
+            ("Reach 1000 lb Club", 30),
+            ("Dunked on the Supe + Ratio", 1000)
         ]
         cursor.executemany(
             "INSERT INTO activities (name, coin_value) VALUES (%s, %s)",
