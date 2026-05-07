@@ -1,415 +1,438 @@
-import json
-import os #to mess with env vars
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+# USed Chat: 
 
-import pymysql
-from flask import Flask, jsonify, request 
 
-#Flask app
+from flask import Flask, jsonify, request, render_template_string
+import mysql.connector
+from mysql.connector import pooling
+import os
+
 app = Flask(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent #function to find parent folder for current dir
-DATA_DIR = BASE_DIR / "data" # where the data jsons are stored with pay info
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "cadetcoin")
 
-# Opens full pay-table data for officer, enlisted, and warrant
-with open(DATA_DIR / "pay_tables_full.json", "r", encoding="utf-8") as f:
-    PAY_TABLES = json.load(f) #dictionary
+pool = None
 
-# Opens the separate BAH data file, need to update*********************************************
-with open(DATA_DIR / "bah_rates_separate.json", "r", encoding="utf-8") as f:
-    BAH_DATA = json.load(f)
 
-#List of years of service for the frontend to select
-YOS_RANGES = [
-    ("2_or_less", 0),
-    ("over_2", 2),
-    ("over_3", 3),
-    ("over_4", 4),
-    ("over_6", 6),
-    ("over_8", 8),
-    ("over_10", 10),
-    ("over_12", 12),
-    ("over_14", 14),
-    ("over_16", 16),
-    ("over_18", 18),
-    ("over_20", 20),
-    ("over_22", 22),
-    ("over_24", 24),
-    ("over_26", 26),
-    ("over_28", 28),
-    ("over_30", 30),
-    ("over_32", 32),
-    ("over_34", 34),
-    ("over_36", 36),
-    ("over_38", 38),
-    ("over_40", 40),
-]
+def init_database():
+    global pool
 
-#Flask runs function after each http response
-@app.after_request
+    server_conn = mysql.connector.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD
+    )
+    server_cursor = server_conn.cursor()
+    server_cursor.execute(f"CREATE DATABASE IF NOT EXISTS {MYSQL_DATABASE}")
+    server_cursor.close()
+    server_conn.close()
 
-# "Cross-Origin Resource Sharing" for accessing diff ports 
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"#allows requests from all origins
-    response.headers["Access-Control-Allow-Methods"] = "*"#allows requests from all http methods
-    response.headers["Access-Control-Allow-Headers"] = "*"#allows requests from all headers
-    return response
-
-# This function opens a new MySQL connection using environment variables from docker-compose.
-def get_connection():
-    # This line returns a live database connection object.
-    return pymysql.connect(
-        host=os.getenv("DB_HOST", "db"),#default db
-        user=os.getenv("DB_USER", "budgetuser"),# default budgetuser
-        password=os.getenv("DB_PASSWORD", "budgetpass"),# default bugdetpass
-        database=os.getenv("DB_NAME", "budgetdb"),# default budgetdb
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True,
+    pool = pooling.MySQLConnectionPool(
+        pool_name="cadetcoin_pool",
+        pool_size=5,
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE
     )
 
-def db_execute(sql: str, params=None, fetchone: bool = False, fetchall: bool = False): #runs mySQL, returns rows
-    connection = get_connection()
-    with connection.cursor() as cursor:
-        cursor.execute(sql, params or ())
-        result = None # rows
-        if fetchone:
-            result = cursor.fetchone()#read a row
-        if fetchall:
-            result = cursor.fetchall()#read all rows
-    connection.close()
-    return result
+    conn = pool.get_connection()
+    cursor = conn.cursor()
 
-def to_number(value: Any) -> float: #convert value to num, sanitize input
-    try:
-        return float(value or 0)
-    except Exception:
-        return 0.0 #base case
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            coins INT NOT NULL DEFAULT 0
+        )
+    """)
 
-# Determines which pay table to use
-def get_pay_table_group(pay_grade: str) -> str:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activities (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            coin_value INT NOT NULL
+        )
+    """)
 
-    if str(pay_grade).startswith("O-"):
-        return "officer" 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS workouts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            activity_id INT NOT NULL,
+            notes TEXT,
+            coins_earned INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (activity_id) REFERENCES activities(id)
+        )
+    """)
 
-    if str(pay_grade).startswith("W-"):
-        return "warrant"
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (name, coins) VALUES (%s, %s)", ("Cadet", 0))
 
-    return "enlisted" 
-
-# Converts years of service num to pay-table range
-def normalize_yos_range(years_of_service: int) -> str:
-    selected = "2_or_less"
-    for label, threshold in YOS_RANGES: #loop through list to find right range for pay
-        if years_of_service > threshold or (label == "2_or_less" and years_of_service <= 2):
-            selected = label
-
-    return selected
-
-# Looks up base pay from table under data folder
-def get_base_pay(pay_grade: str, years_of_service: int) -> float:
-
-    group = get_pay_table_group(pay_grade) #grab right pay table group
-
-    range = normalize_yos_range(years_of_service)
-    
-    pay_row = PAY_TABLES.get(group, {}).get(pay_grade, {})#pay row for selected pay grade
-
-    if range in pay_row: 
-        return round(float(pay_row[range]), 2) # exact range val
-
-    last_value = 0.0 
-    for label, _threshold in YOS_RANGES: #if a range is not explicit, determines last range
-
-        if label in pay_row:
-            last_value = float(pay_row[label])
-
-        if label == range:
-            break # Correct range for pay found
-    return round(last_value, 2)
-
-# Grabs BAS from file
-def get_bas(pay_grade: str) -> float:
-    latest_date = sorted(PAY_TABLES["bas_history"].keys())[-1]
-    bas_row = PAY_TABLES["bas_history"][latest_date]#reads the BAS row for that latest date.
-
-    #Officer BAS for officers and enlisted BAS for everyone else.
-    return float(bas_row["officers"] if str(pay_grade).startswith("O-") else bas_row["enlisted"])
-
-# This function returns a sorted list of available BAH locations from the external BAH file.
-def get_location_list() -> List[Dict[str, str]]:
-    items = []
-
-    for year_key, year_rows in BAH_DATA.items():
-        if year_key == "_meta":
-            continue
-        #Loops each location row for the year.
-        for code, row in year_rows.items():
-            items.append({
-                "label": row.get("mha_name", code),
-                "code": code,
-                "year": year_key
-            })
-    #Sorts the locations by label and code and returns them.
-    return sorted(items, key=lambda x: (x["label"], x["code"]))
-
-# Find BAH row by name of location instead of location code.
-def find_location_record(location_label: str) -> Optional[Dict[str, Any]]:
-
-    target = (location_label or "").strip().lower()
-    if not target:#no location given
-        return None
-
-    for year_key, year_rows in BAH_DATA.items():
-        if year_key == "_meta":
-            continue
-        for code, row in year_rows.items():#each location row
-            label = str(row.get("mha_name", "")).strip().lower()#label name in BAH row
-
-            if target == label or target == str(code).strip().lower(): #matches label name to code
-                return {
-                    "year": year_key,
-                    "code": code,
-                    "label": row.get("mha_name", code),
-                    "row": row
-                }
-    return None
-
-def bah_grade_key(pay_grade: str) -> str:
-    # E-5 -> E5; O-3 -> O3
-    return str(pay_grade).replace("-", "")
-
-# Looks up BAH
-def get_bah(location_label: str, has_dependents: str, pay_grade: str, bah_override: Optional[float]) -> Dict[str, Any]:
-    
-    if bah_override not in (None, "", 0): #exact BAH entered, so function override
-        return {
-            "amount": round(float(bah_override), 2),
-            "location_label": location_label or "",
-            "location_code": "",
-            "source": "override"
-        }
-    # Looks up matching location from the BAH file.
-    match = find_location_record(location_label)
-    if not match:
-        return {
-            "amount": 0.0,
-            "location_label": location_label or "",
-            "location_code": "",
-            "source": "not_found"
-        }
-    dep_key = "with_dependents" if str(has_dependents).lower() == "yes" else "without_dependents"
-    rates = match["row"].get(dep_key, {}) #rate table for dependents
-
-    lookup_grade = bah_grade_key(pay_grade)
-
-    amount = float(rates.get(lookup_grade, 0.0))#matches to pay grade
-    return {
-        "amount": round(amount, 2),
-        "location_label": match["label"],
-        "location_code": match["code"],
-        "source": "bah_file"
-    }
-
-# Monthly federal income tax based on annual brackets
-def estimate_federal_monthly(annual_taxable: float, filing_status: str) -> float:
-
-    federal_brackets = { # yay taxes
-        "single": [(12400, 0.10), (50400, 0.12), (105700, 0.22), (201775, 0.24), (256225, 0.32), (640600, 0.35), (10**12, 0.37)],
-        "married": [(24800, 0.10), (100800, 0.12), (211400, 0.22), (403550, 0.24), (512450, 0.32), (768700, 0.35), (10**12, 0.37)],
-        "hoh": [(17700, 0.10), (67450, 0.12), (105700, 0.22), (201750, 0.24), (256200, 0.32), (640600, 0.35), (10**12, 0.37)],
-    }
-    #Tax deductions
-    standard_deduction = {"single": 16100, "married": 32200, "hoh": 24150}
-
-    #after deductions
-    taxable = max(annual_taxable - standard_deduction.get(filing_status, 16100), 0)
-    tax = 0.0
-    last = 0.0
-    #loop for current tax bracket, MAJ Gee had to explain to me before how tax brackets worked
-    for ceiling, rate in federal_brackets.get(filing_status, federal_brackets["single"]):
-
-        amount = min(taxable, ceiling) - last #how much income falls into bracket
-
-        if amount > 0: #if income falls into bracket
-            tax += amount * rate
-
-        last = ceiling #for next bracket
-
-        if taxable <= ceiling:
-            break
-
-    return round(tax / 12.0, 2)# Monthly tax
-
-#FICA withholding
-def estimate_fica_monthly(annual_taxable: float) -> float:
-    ss_taxable = min(annual_taxable, 184500)
-    ss = ss_taxable * 0.062 #annual social security withholding
-    return round(ss / 12.0, 2)
-
-# Estimates monthly state tax using rate table.
-def estimate_state_monthly(annual_taxable: float, state: str) -> float:
-    state_rates = {"AK": 0.0, "FL": 0.0, "NV": 0.0, "NH": 0.0, "SD": 0.0, "TN": 0.0, "TX": 0.0, "WA": 0.0, "WY": 0.0, "CA": 0.07, "NY": 0.06, "VA": 0.05, "NC": 0.0425, "PA": 0.0307}
-
-    rate = state_rates.get((state or "").upper(), 0.04)# if for some reason no state, 4% default
-    taxable = max(annual_taxable - 5000, 0)
-
-    return round((taxable * rate) / 12.0, 2)# monthly
-
-# Builds the budget response shown on the website frontend
-def build_budget(row: Dict[str, Any]) -> Dict[str, Any]:
-    base_pay = to_number(row["base_pay"])
-    bas = to_number(row["bas"])
-    bah = to_number(row["bah"])
-    special_pay = to_number(row["special_pay"])
-    other_taxable = to_number(row["other_taxable"])
-    other_nontaxable = to_number(row["other_nontaxable"])
-    
-    #Annual taxable income from monthly taxable items.
-    annual_taxable = (base_pay + special_pay + other_taxable) * 12
-    federal_tax = estimate_federal_monthly(annual_taxable, row["filing_status"])
-    fica = estimate_fica_monthly(annual_taxable)
-    state_tax = estimate_state_monthly(annual_taxable, row["resident_state"])
-    
-    #Gross monthly income.
-    gross = round(base_pay + bas + bah + special_pay + other_taxable + other_nontaxable, 2)
-    #Monthly costs out
-    outflows = round(federal_tax + fica + state_tax + to_number(row["tsp"]) + to_number(row["allotments"]) + to_number(row["debts"]) + to_number(row["sgli"]), 2)
-    #Monthly net pay.
-    net = round(gross - outflows, 2)
-
-    #Housing Budget is min of BAH vs 35% of net pay
-    housing = round(min(bah, net * 0.35), 2)
-    #Food budget as the min of BAS and 12% of net pay.
-    food = round(min(bas, net * 0.12), 2)
-    #Savings budget as the max of TSP and 10% of net pay
-    savings = round(max(to_number(row["tsp"]), net * 0.10), 2)
-    #Debt budget as the max of current debts and 5% of net pay
-    debt = round(max(to_number(row["debts"]), net * 0.05), 2)
-    #Money remaining after everything else
-    remaining = round(net - housing - food - savings - debt, 2)
-
-    #Half of money left over is expendable
-    spending = max(round(remaining * 0.5, 2), 0)
-    #everything else is for emergencies
-    emergency = max(round(remaining - spending, 2), 0)
-
-    return {
-        "summary": {
-            "name": row["name"],
-            "branch": row["branch"],
-            "pay_grade": row["pay_grade"],
-            "years_of_service": row["years_of_service"],
-            "resident_state": row["resident_state"],
-            "duty_location": row["duty_location"],
-            "duty_location_code": row["duty_location_code"],
-            "base_pay": base_pay,
-            "bas": bas,
-            "bah": bah,
-            "federal_tax": federal_tax,
-            "fica": fica,
-            "state_tax": state_tax,
-            "net_pay": net
-        },
-        "budget": [
-            {"category": "Housing", "amount": housing, "reason": "Anchored to BAH when available."},
-            {"category": "Food", "amount": food, "reason": "Anchored to BAS when available."},
-            {"category": "Savings / TSP", "amount": savings, "reason": "At least current TSP or 10% of net pay."},
-            {"category": "Debt Paydown", "amount": debt, "reason": "Covers current debts or 5% of net pay."},
-            {"category": "Emergency Fund", "amount": emergency, "reason": "Uses part of remaining pay as reserve."},
-            {"category": "Flexible Spending", "amount": spending, "reason": "Remaining money for household and misc."}
+    cursor.execute("SELECT COUNT(*) FROM activities")
+    if cursor.fetchone()[0] == 0:
+        default_activities = [
+            ("Run", 10),
+            ("Gym Workout", 15),
+            ("Improved AFT Score", 25),
+            ("Fitness Milestone", 30)
         ]
+        cursor.executemany(
+            "INSERT INTO activities (name, coin_value) VALUES (%s, %s)",
+            default_activities
+        )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_db():
+    return pool.get_connection()
+
+
+@app.route("/")
+def index():
+    return render_template_string("""
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CadetCoin</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background: #f4f4f4;
     }
 
-#route list of BAH locations for dropdown and search
-@app.route("/locations", methods=["GET"])
-def locations():
-    # Location list as JSON.
-    return jsonify(get_location_list())
+    header {
+      background: #222;
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
 
-#route for frontend to preview pay, BAS, and BAH
-@app.route("/pay-lookup", methods=["POST"])
-def pay_lookup():
-    #reads the request JSON
-    payload = request.get_json(force=True, silent=True) or {}
-    pay_grade = payload.get("pay_grade", "E-5")
-    years_of_service = int(payload.get("years_of_service", 6))
-    duty_location = payload.get("duty_location", "")
-    has_dependents = payload.get("has_dependents", "yes")
-    bah_override = payload.get("bah_override")
-    bah_result = get_bah(duty_location, has_dependents, pay_grade, bah_override)
+    nav {
+      background: #444;
+      padding: 10px;
+      text-align: center;
+    }
+
+    nav a {
+      color: white;
+      margin: 0 15px;
+      text-decoration: none;
+    }
+
+    section {
+      background: white;
+      margin: 20px auto;
+      padding: 20px;
+      width: 80%;
+      max-width: 800px;
+      border-radius: 8px;
+    }
+
+    button {
+      background: #222;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      cursor: pointer;
+    }
+
+    input, select {
+      padding: 8px;
+      margin: 5px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .coins {
+      font-size: 24px;
+      font-weight: bold;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>CadetCoin</h1>
+    <p>Earn coins by staying physically active</p>
+  </header>
+
+  <nav>
+    <a href="#dashboard">Dashboard</a>
+    <a href="#workout">Log Workout</a>
+    <a href="#leaderboard">Leaderboard</a>
+    <a href="#rewards">Rewards</a>
+    <a href="#admin">Admin</a>
+  </nav>
+
+  <section id="dashboard">
+    <h2>Cadet Dashboard</h2>
+    <p>Welcome, <span id="cadetName">Cadet</span>!</p>
+    <p>Your Balance:</p>
+    <p class="coins" id="coinBalance">0 CadetCoins</p>
+  </section>
+
+  <section id="workout">
+    <h2>Log Workout</h2>
+
+    <label>Workout Type</label>
+    <select id="workoutType"></select>
+
+    <label>Workout Notes</label>
+    <input type="text" id="notes" placeholder="Example: Ran 3 miles">
+
+    <button onclick="logWorkout()">Submit Workout</button>
+
+    <h3>Workout History</h3>
+    <ul id="history"></ul>
+  </section>
+
+  <section id="leaderboard">
+    <h2>Leaderboard</h2>
+    <ol id="leaderboardList"></ol>
+  </section>
+
+  <section id="rewards">
+    <h2>Rewards</h2>
+    <ul>
+      <li>Company Store Discount - 50 coins</li>
+      <li>Peer Challenge Entry - 25 coins</li>
+      <li>PMI Incentive - 100 coins</li>
+      <li>Privilege Reward - 150 coins</li>
+    </ul>
+  </section>
+
+  <section id="admin">
+    <h2>Admin Panel</h2>
+    <p>Admins can configure coin values, manage cadet accounts, and review activity reports.</p>
+
+    <label>Activity Name</label>
+    <input type="text" id="adminActivityName" placeholder="Example: 5-mile run">
+
+    <label>Coin Value</label>
+    <input type="number" id="adminCoinValue" placeholder="Example: 40">
+
+    <button onclick="saveActivity()">Save Activity Value</button>
+  </section>
+
+  <script>
+    async function loadDashboard() {
+      const response = await fetch("/api/dashboard");
+      const data = await response.json();
+
+      document.getElementById("cadetName").innerText = data.user.name;
+      document.getElementById("coinBalance").innerText = data.user.coins + " CadetCoins";
+
+      const workoutSelect = document.getElementById("workoutType");
+      workoutSelect.innerHTML = "";
+
+      data.activities.forEach(activity => {
+        const option = document.createElement("option");
+        option.value = activity.id;
+        option.innerText = activity.name + " - " + activity.coin_value + " coins";
+        workoutSelect.appendChild(option);
+      });
+
+      const history = document.getElementById("history");
+      history.innerHTML = "";
+
+      data.workouts.forEach(workout => {
+        const item = document.createElement("li");
+        item.innerText = workout.activity_name + " - " + workout.notes + " - +" + workout.coins_earned + " coins";
+        history.appendChild(item);
+      });
+
+      const leaderboard = document.getElementById("leaderboardList");
+      leaderboard.innerHTML = "";
+
+      data.leaderboard.forEach(user => {
+        const item = document.createElement("li");
+        item.innerText = user.name + " - " + user.coins + " coins";
+        leaderboard.appendChild(item);
+      });
+    }
+
+    async function logWorkout() {
+      const activityId = document.getElementById("workoutType").value;
+      const notes = document.getElementById("notes").value;
+
+      const response = await fetch("/api/workouts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          activity_id: activityId,
+          notes: notes
+        })
+      });
+
+      if (!response.ok) {
+        alert("Error logging workout.");
+        return;
+      }
+
+      document.getElementById("notes").value = "";
+      loadDashboard();
+    }
+
+    async function saveActivity() {
+      const name = document.getElementById("adminActivityName").value;
+      const coinValue = document.getElementById("adminCoinValue").value;
+
+      const response = await fetch("/api/admin/activity", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: name,
+          coin_value: coinValue
+        })
+      });
+
+      if (!response.ok) {
+        alert("Error saving activity.");
+        return;
+      }
+
+      document.getElementById("adminActivityName").value = "";
+      document.getElementById("adminCoinValue").value = "";
+      loadDashboard();
+    }
+
+    loadDashboard();
+  </script>
+
+</body>
+</html>
+""")
+
+
+@app.route("/api/dashboard")
+def dashboard():
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT id, name, coins FROM users WHERE id = %s", (1,))
+    user = cursor.fetchone()
+
+    cursor.execute("SELECT id, name, coin_value FROM activities ORDER BY id")
+    activities = cursor.fetchall()
+
+    cursor.execute("""
+        SELECT 
+            workouts.id,
+            activities.name AS activity_name,
+            workouts.notes,
+            workouts.coins_earned,
+            workouts.created_at
+        FROM workouts
+        JOIN activities ON workouts.activity_id = activities.id
+        WHERE workouts.user_id = %s
+        ORDER BY workouts.created_at DESC
+    """, (1,))
+    workouts = cursor.fetchall()
+
+    cursor.execute("SELECT name, coins FROM users ORDER BY coins DESC")
+    leaderboard = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
 
     return jsonify({
-        "base_pay": get_base_pay(pay_grade, years_of_service),
-        "bas": get_bas(pay_grade),
-        "bah": bah_result["amount"],
-        "duty_location": bah_result["location_label"],
-        "duty_location_code": bah_result["location_code"],
-        "bah_source": bah_result["source"]
+        "user": user,
+        "activities": activities,
+        "workouts": workouts,
+        "leaderboard": leaderboard
     })
 
-#Route saves LES row and returns budget built
-@app.route("/les", methods=["POST", "OPTIONS"])
-def save_les():
 
-    if request.method == "OPTIONS":
-        return jsonify({"ok": True})
-    
-    # This line reads the JSON body from the request
-    payload = request.get_json(force=True, silent=True) or {}
-    #defaults set
-    pay_grade = payload.get("pay_grade", "E-5")
-    years_of_service = int(payload.get("years_of_service", 6))
-    bah_result = get_bah(payload.get("duty_location", ""), payload.get("has_dependents", "yes"), pay_grade, payload.get("bah_override"))
-    base_pay = get_base_pay(pay_grade, years_of_service)
-    bas = get_bas(pay_grade)
-    bah = bah_result["amount"]
-    #MySQL statement inserts a new LES row.
-    sql = (
-        "INSERT INTO les_entries ("
-        "name, branch, pay_grade, years_of_service, filing_status, resident_state, duty_location, duty_location_code, has_dependents, "
-        "base_pay, bas, bah, special_pay, other_taxable, other_nontaxable, "
-        "tsp, allotments, debts, sgli, notes"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-    )
-    params = (
-        payload.get("name", "Service Member"),
-        payload.get("branch", "Army"),
-        pay_grade,
-        years_of_service,
-        payload.get("filing_status", "single"),
-        payload.get("resident_state", "FL"),
-        bah_result["location_label"],
-        bah_result["location_code"],
-        payload.get("has_dependents", "yes"),
-        base_pay,
-        bas,
-        bah,
-        to_number(payload.get("special_pay")),
-        to_number(payload.get("other_taxable")),
-        to_number(payload.get("other_nontaxable")),
-        to_number(payload.get("tsp")),
-        to_number(payload.get("allotments")),
-        to_number(payload.get("debts")),
-        to_number(payload.get("sgli")),
-        payload.get("notes", "")
-    )
-    #Runs MySQL insert statement.
-    db_execute(sql, params)
-    #Finds newest row from database.
-    row = db_execute("SELECT * FROM les_entries ORDER BY id DESC LIMIT 1", fetchone=True)
+@app.route("/api/workouts", methods=["POST"])
+def create_workout():
+    data = request.get_json()
 
-    if not row:
-        return jsonify({"error": "database not ready"}), 503 #row not read
+    activity_id = data.get("activity_id")
+    notes = data.get("notes", "")
 
-    return jsonify(build_budget(row))
+    if not activity_id:
+        return jsonify({"error": "Activity ID is required"}), 400
 
-@app.route("/budget", methods=["GET"])# Gets latest budget data
-def latest_budget():
-    row = db_execute("SELECT * FROM les_entries ORDER BY id DESC LIMIT 1", fetchone=True)#newest row
-    if not row:
-        return jsonify({"error": "no LES data yet"}), 404 #if nothing saved
-    return jsonify(build_budget(row))#returns budget built
+    conn = get_db()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT id, coin_value FROM activities WHERE id = %s", (activity_id,))
+    activity = cursor.fetchone()
+
+    if not activity:
+        cursor.close()
+        conn.close()
+        return jsonify({"error": "Invalid activity"}), 400
+
+    coins_earned = activity["coin_value"]
+
+    cursor.execute("""
+        INSERT INTO workouts (user_id, activity_id, notes, coins_earned)
+        VALUES (%s, %s, %s, %s)
+    """, (1, activity_id, notes, coins_earned))
+
+    cursor.execute("""
+        UPDATE users
+        SET coins = coins + %s
+        WHERE id = %s
+    """, (coins_earned, 1))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({"message": "Workout logged", "coins_earned": coins_earned})
+
+
+@app.route("/api/admin/activity", methods=["POST"])
+def save_activity():
+    data = request.get_json()
+
+    name = data.get("name", "").strip()
+    coin_value = data.get("coin_value")
+
+    if not name or not coin_value:
+        return jsonify({"error": "Activity name and coin value are required"}), 400
+
+    try:
+        coin_value = int(coin_value)
+    except ValueError:
+        return jsonify({"error": "Coin value must be a number"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO activities (name, coin_value)
+        VALUES (%s, %s)
+    """, (name, coin_value))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({"message": "Activity saved"})
+
+
+init_database()
+
+# Apache mod_wsgi looks for "application"
+application = app
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)#runs on localhost:8080
+    app.run(debug=True)
