@@ -17,10 +17,10 @@ services:
       context: .
       dockerfile: app/Dockerfile
     environment: #connect to MySQL
-      DB_HOST: db
-      DB_NAME: budgetdb
-      DB_USER: budgetuser
-      DB_PASSWORD: budgetpass
+      MYSQL_HOST: db
+      MYSQL_DATABASE: cadetcoin
+      MYSQL_USER: cadetuser
+      MYSQL_PASSWORD: cadetpass
 
     #Expose app backend to host
     ports:
@@ -41,9 +41,9 @@ services:
       context: ./db
       dockerfile: Dockerfile
     environment: #initializes MySQL
-      MYSQL_DATABASE: budgetdb
-      MYSQL_USER: budgetuser
-      MYSQL_PASSWORD: budgetpass
+      MYSQL_DATABASE: cadetcoin
+      MYSQL_USER: cadetuser
+      MYSQL_PASSWORD: cadetpass
       MYSQL_ROOT_PASSWORD: rootpass
     volumes: #volume to store database info safely
       # Named volume to MySQL's data folder
