@@ -684,7 +684,7 @@ def dashboard():
             activities.name AS activity_name,
             workouts.notes,
             workouts.coins_earned,
-            DATE_FORMAT(workouts.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+            workouts.created_at
         FROM workouts
         JOIN activities ON workouts.activity_id = activities.id
         WHERE workouts.user_id = %s
