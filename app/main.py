@@ -1,11 +1,26 @@
+from datetime import timedelta
+
 from flask import Flask, jsonify, request, render_template_string, session, redirect
 import mysql.connector
 from mysql.connector import pooling
 import os
+from datetime import timedelta
+
 
 app = Flask(__name__)
 
 app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key")
+
+
+
+
+
+app.config.update( #fix cookie
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7)
+)
 
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
@@ -286,6 +301,10 @@ def login_page():
 </body>
 </html>
 """)
+
+
+
+
 
 
 @app.route("/dashboard.html")
@@ -615,7 +634,9 @@ def api_login():
             "coins": 0
         }
 
+    session.permanent = True #issues with cookie expiring before
     session["user_id"] = user["id"]
+
 
     cursor.close()
     conn.close()
