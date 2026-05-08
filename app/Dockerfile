@@ -8,6 +8,4 @@ RUN pip install flask mysql-connector-python werkzeug
 
 COPY app/main.py /app/main.py
 
-COPY data /app/data
-
 CMD ["python", "main.py"]

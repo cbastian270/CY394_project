@@ -7,12 +7,6 @@ app = Flask(__name__)
 
 app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key")
 
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False
-)
-
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
@@ -27,82 +21,89 @@ pool = None
 def init_database():
     global pool
 
-    server_conn = mysql.connector.connect(
-        host=MYSQL_HOST,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD
-    )
-    server_cursor = server_conn.cursor()
-    server_cursor.execute(f"CREATE DATABASE IF NOT EXISTS {MYSQL_DATABASE}")
-    server_cursor.close()
-    server_conn.close()
+    last_error = None
 
-    pool = pooling.MySQLConnectionPool(
-        pool_name="cadetcoin_pool",
-        pool_size=5,
-        host=MYSQL_HOST,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE
-    )
+    for attempt in range(30):
+        try:
+            pool = pooling.MySQLConnectionPool(
+                pool_name="cadetcoin_pool",
+                pool_size=5,
+                host=MYSQL_HOST,
+                user=MYSQL_USER,
+                password=MYSQL_PASSWORD,
+                database=MYSQL_DATABASE
+            )
 
-    conn = pool.get_connection()
-    cursor = conn.cursor()
+            conn = pool.get_connection()
+            cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            coins INT NOT NULL DEFAULT 0
-        )
-    """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    coins INT NOT NULL DEFAULT 0
+                )
+            """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activities (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            coin_value INT NOT NULL
-        )
-    """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS activities (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    coin_value INT NOT NULL
+                )
+            """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS workouts (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            activity_id INT NOT NULL,
-            notes TEXT,
-            coins_earned INT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (activity_id) REFERENCES activities(id)
-        )
-    """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workouts (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    activity_id INT NOT NULL,
+                    notes TEXT,
+                    coins_earned INT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    FOREIGN KEY (activity_id) REFERENCES activities(id)
+                )
+            """)
 
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO users (name, coins) VALUES (%s, %s)", ("Cadet", 0))
+            cursor.execute("SELECT COUNT(*) FROM users")
+            if cursor.fetchone()[0] == 0:
+                cursor.execute(
+                    "INSERT INTO users (name, coins) VALUES (%s, %s)",
+                    ("Cadet", 0)
+                )
 
-    cursor.execute("SELECT COUNT(*) FROM activities")
-    if cursor.fetchone()[0] == 0:
-        default_activities = [
-            ("Recorded Run", 10),
-            ("Company Workout", 15),
-            ("Improved AFT Score", 25),
-            ("Maxed AFT", 30),
-            ("Ran marathon", 30),
-            ("Reach 1000 lb Club", 30),
-            ("Dunked on the Supe + Ratio", 1000)
-        ]
+            cursor.execute("SELECT COUNT(*) FROM activities")
+            if cursor.fetchone()[0] == 0:
+                default_activities = [
+                    ("Recorded Run", 10),
+                    ("Company Workout", 15),
+                    ("Improved AFT Score", 25),
+                    ("Maxed AFT", 30),
+                    ("Ran marathon", 30),
+                    ("Reach 1000 lb Club", 30),
+                    ("Dunked on the Supe + Ratio", 1000)
+                ]
 
-        cursor.executemany(
-            "INSERT INTO activities (name, coin_value) VALUES (%s, %s)",
-            default_activities
-        )
+                cursor.executemany(
+                    "INSERT INTO activities (name, coin_value) VALUES (%s, %s)",
+                    default_activities
+                )
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+            conn.commit()
+            cursor.close()
+            conn.close()
 
+            print("Connected to MySQL and initialized database.")
+            return
+
+        except mysql.connector.Error as error:
+            last_error = error
+            print(f"MySQL not ready yet. Attempt {attempt + 1}/30: {error}")
+            time.sleep(2)
+
+
+    raise RuntimeError(f"Could not connect to MySQL after retries: {last_error}")
 
 def get_db():
     return pool.get_connection()
