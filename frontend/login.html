@@ -1,81 +1,134 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>CadetCoin Login Page</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CadetCoin Login</title>
+
   <style>
-    body {
-      font-family: Arial, sans-serif;
+    * {
+      box-sizing: border-box;
       margin: 0;
-      background: #f4f4f4;
+      padding: 0;
+      font-family: Arial, sans-serif;
     }
 
-    header {
-      background: #222;
-      color: white;
-      padding: 40px;
+    body {
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: linear-gradient(135deg, #1f2937, #111827);
+      color: #fff;
+    }
+
+    .login-container {
+      background: #ffffff;
+      color: #222;
+      width: 100%;
+      max-width: 400px;
+      padding: 40px 30px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .login-container h1 {
       text-align: center;
+      margin-bottom: 10px;
+      color: #111827;
     }
 
-    nav {
-      background: #444;
-      padding: 20px;
+    .login-container p.subtitle {
       text-align: center;
+      margin-bottom: 25px;
+      color: #6b7280;
+      font-size: 14px;
     }
 
-    nav a {
-      color: white;
-      margin: 0 15px;
-      text-decoration: none;
+    form {
+      display: flex;
+      flex-direction: column;
     }
 
-    section {
-      background: white;
-      margin: 20px auto;
-      padding: 20px;
-      width: 80%;
-      max-width: 800px;
+    label {
+      margin-bottom: 6px;
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    input {
+      padding: 12px;
+      margin-bottom: 18px;
+      border: 1px solid #d1d5db;
       border-radius: 8px;
+      font-size: 14px;
+      transition: border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
     }
 
     button {
-      background: #222;
+      background: #2563eb;
       color: white;
-      padding: 10px 15px;
       border: none;
-      cursor: pointer;
-    }
-
-    input, select {
-      padding: 8px;
-      margin: 5px 0;
-      width: 100%;
-    }
-
-    .coins {
-      font-size: 24px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 16px;
       font-weight: bold;
-      color: green;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.1s ease;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    #errorMessage {
+      margin-top: 15px;
+      text-align: center;
+      color: #dc2626;
+      font-size: 14px;
+      min-height: 20px;
+    }
+
+    .brand {
+      text-align: center;
+      font-size: 28px;
+      font-weight: bold;
+      color: #10b981;
+      margin-bottom: 5px;
     }
   </style>
 </head>
 <body>
-
-  <header>
+  <div class="login-container">
+    <div class="brand">CadetCoin</div>
     <h1>Login</h1>
-    <p>Enter your assigned login credentials loser</p>
-  </header>
+    <p class="subtitle">For help, contact MAJ Haskins at joshua.haskins2@westpoint.edu</p>
 
-  <section id="Enter Your Login">
-    <input type="text" id="Name" placeholder="firstname.lastname">
-    <input type="text" id="ID" placeholder="NUM assigned by CoC">
-    <button onclick="login()">Submit</button>
-  </section>
+    <form id="loginForm">
+      <label for="username">Username</label>
+      <input id="username" type="text" placeholder="firstname.lastname" required>
 
-  <script>
-  function login() {
-    window.location.href = "index.html";
-  }
-  </script>
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="Enter your assigned ID" required>
 
+      <button type="submit">Login</button>
+      
+
+    </form>
+
+    <p id="errorMessage"></p>
+  </div>
+
+  <script src="login.js"></script>
 </body>
 </html>
