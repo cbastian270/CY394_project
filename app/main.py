@@ -4,16 +4,15 @@ from flask import Flask, jsonify, request, render_template_string, session, redi
 import mysql.connector
 from mysql.connector import pooling
 import os
-from datetime import timedelta
+from werkzeug.security import check_password_hash
 import time
 
 app = Flask(__name__)
 
-app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key")
+app.secret_key = os.getenv("SECRET_KEY")
 
-
-
-
+if not app.secret_key:
+    raise RuntimeError("Needs SECRET_KEY environment variable")
 
 app.config.update( #fix cookie
     SESSION_COOKIE_HTTPONLY=True,
@@ -28,8 +27,7 @@ MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "cadetcoin")
 
 LOGIN_USERNAME = os.getenv("LOGIN_USERNAME", "cadet.demo")
-LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "demo")
-
+LOGIN_PASSWORD_HASH = os.getenv("LOGIN_PASSWORD_HASH")
 pool = None
 
 
@@ -612,7 +610,13 @@ def api_login():
             "error": "Username and password are required"
         }), 400
 
-    if username != LOGIN_USERNAME or password != LOGIN_PASSWORD:
+    if not LOGIN_PASSWORD_HASH:
+        return jsonify({
+            "success": False,
+            "error": "Login password hash is not configured"
+        }), 500
+
+    if username != LOGIN_USERNAME or not check_password_hash(LOGIN_PASSWORD_HASH, password):
         return jsonify({
             "success": False,
             "error": "Invalid username or password"
