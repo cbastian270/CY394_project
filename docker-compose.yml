@@ -41,6 +41,7 @@ services:
       context: ./db
       dockerfile: Dockerfile
     environment: #initializes MySQL
+      SECRET_KEY: "de3e72ce62445e9a58d0c0bd4553395a50813dc449450903876a6a4eb2d90821"
       MYSQL_DATABASE: cadetcoin
       MYSQL_USER: cadetuser
       MYSQL_PASSWORD: cadetpass
